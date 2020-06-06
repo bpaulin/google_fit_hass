@@ -52,6 +52,8 @@ from homeassistant.helpers import config_validation
 from homeassistant.helpers import entity, entity_platform
 from homeassistant.helpers.event import track_time_change
 from homeassistant.util.dt import utc_from_timestamp
+from googleapiclient.errors import HttpError
+from pprint import pprint
 
 REQUIREMENTS = [
     'google-api-python-client==1.6.4',
@@ -221,7 +223,49 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     token_file = hass.config.path(TOKEN_FILE)
     client = _get_client(token_file)
 
-    add_devices([GoogleFitWeightSensor(client, name),
+    DATASOURCEID_FILE = '.{}_{}.datasourceid'.format(name,SENSOR)
+    datasource_file = hass.config.path(DATASOURCEID_FILE)
+    datasourceid = None
+    if os.path.isfile(datasource_file):
+        _LOGGER.debug('found datasource file')
+        with open(datasource_file, 'r') as file:
+            datasourceid = file.read().replace('\n', '')
+        _LOGGER.debug(datasourceid)
+        datasources_request = client.users().dataSources().get(
+            userId=API_USER_ID,
+            dataSourceId=datasourceid,
+        )
+        try:
+            data = datasources_request.execute()
+        except:
+            _LOGGER.error('datasources not found on api')
+        pass
+    else:
+        _LOGGER.warning('missing datasource file')
+
+        datasources_request = client.users().dataSources().create(
+            userId=API_USER_ID,
+            body={
+                'type': 'raw',
+                'application': {
+                    'name': 'home assistant'
+                },
+                'dataType': {
+                    'name': 'com.google.weight'
+                },
+            }
+        )
+        try:
+            data = datasources_request.execute()
+        except HttpError as ex:
+            _LOGGER.error(ex)
+        else:
+            pprint(data)
+            datasourceid = data['dataStreamId']
+            with open(datasource_file, 'w') as file:
+                file.write(datasourceid)
+
+    add_devices([GoogleFitWeightSensor(client, name, datasourceid),
                  GoogleFitHeartRateSensor(client, name),
                  GoogleFitHeightSensor(client, name),
                  GoogleFitStepsSensor(client, name),
@@ -332,6 +376,11 @@ class GoogleFitSensor(entity.Entity):
             execute()
 
 class GoogleFitWeightSensor(GoogleFitSensor):
+
+    def __init__(self, client, name, datasourceid):
+        super().__init__(client, name)
+        self._datasourceid = datasourceid
+
     @property
     def unit_of_measurement(self):
         """Returns the unit of measurement."""
@@ -348,7 +397,38 @@ class GoogleFitWeightSensor(GoogleFitSensor):
         return WEIGHT
 
     def set_new_weight(self, new_weight):
-        return 345
+        _LOGGER.debug('received new weight')
+        if not self._datasourceid:
+            raise Exception('No datasource provided')
+        now = int(time.mktime(datetime.today().timetuple()) * 1000000000)
+        dataset = "%s-%s" % (
+            now,
+            now
+        )
+        self._client.users().dataSources().datasets().patch(
+            userId=API_USER_ID,
+            dataSourceId=self._datasourceid,
+            datasetId=dataset,
+            body={
+                "dataSourceId": self._datasourceid,
+                "maxEndTimeNs": now,
+                "minStartTimeNs": now,
+                "point": [
+                    {
+                        "dataTypeName": "com.google.weight",
+                        "endTimeNanos": now,
+                        "startTimeNanos": now,
+                        "value": [
+                            {
+                            "fpVal": new_weight
+                            }
+                        ]
+                    }
+                ]
+
+            }
+        ).execute()
+        return True
 
     @util.Throttle(MIN_TIME_BETWEEN_SCANS, MIN_TIME_BETWEEN_UPDATES)
     def update(self):
