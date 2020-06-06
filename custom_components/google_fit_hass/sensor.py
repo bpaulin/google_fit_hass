@@ -53,7 +53,6 @@ from homeassistant.helpers import entity, entity_platform
 from homeassistant.helpers.event import track_time_change
 from homeassistant.util.dt import utc_from_timestamp
 from googleapiclient.errors import HttpError
-from pprint import pprint
 
 REQUIREMENTS = [
     'google-api-python-client==1.6.4',
@@ -260,7 +259,6 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
         except HttpError as ex:
             _LOGGER.error(ex)
         else:
-            pprint(data)
             datasourceid = data['dataStreamId']
             with open(datasource_file, 'w') as file:
                 file.write(datasourceid)
